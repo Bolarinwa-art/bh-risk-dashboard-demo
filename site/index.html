@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Risk Dashboard · Brevan Howard demo</title>
+<style>
+  body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f6f9;color:#032d60}
+  header{background:#032d60;color:#fff;padding:16px 28px;display:flex;justify-content:space-between;align-items:center}
+  header h1{margin:0;font-size:20px} header span{font-size:13px;opacity:.85}
+  main{padding:24px 28px;max-width:1100px;margin:0 auto}
+  .banner{border-radius:8px;padding:18px 20px;font-size:18px;font-weight:bold;margin-bottom:18px}
+  .bad{background:#fde7e9;color:#ba0517;border:2px solid #ba0517}
+  .good{background:#e6f4ea;color:#2e844a;border:2px solid #2e844a}
+  .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:#fff;border-radius:8px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .card b{display:block;font-size:12px;color:#565656;margin-bottom:4px;text-transform:uppercase}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden}
+  th,td{padding:10px 12px;border-bottom:1px solid #e5e5e5;text-align:right} th:first-child,td:first-child{text-align:left}
+  th{background:#eef1f6;font-size:13px} .empty td{color:#999;text-align:center;font-style:italic;height:120px}
+  .note{font-size:12px;color:#565656;margin-top:10px}
+</style>
+</head>
+<body>
+<header><h1>Risk Dashboard</h1><span id="ver">loading…</span></header>
+<main>
+  <div id="banner" class="banner">Loading…</div>
+  <div class="meta">
+    <div class="card"><b>Version</b><span id="v">–</span></div>
+    <div class="card"><b>Market data feed</b><span id="feed">–</span></div>
+    <div class="card"><b>Deployed</b><span id="at">–</span></div>
+    <div class="card"><b>Pipeline run</b><a id="run" href="#">–</a></div>
+  </div>
+  <table>
+    <thead><tr><th>Book</th><th>VaR 1d 99% ($m)</th><th>Delta ($m)</th><th>Gross exposure ($bn)</th><th>Limit use</th></tr></thead>
+    <tbody id="grid"></tbody>
+  </table>
+  <p class="note">Sample data for the Brevan Howard ITSM demo. Not real positions.</p>
+</main>
+<script>
+const rows=[["Global Macro – Rates",12.4,3.1,8.2,"62%"],["FX Options",6.8,-1.4,3.9,"48%"],["EM Credit",4.1,0.7,1.6,"35%"],["Commodities",3.3,0.2,1.1,"29%"]];
+fetch('version.json?ts='+Date.now()).then(r=>r.json()).then(v=>{
+  const ok=v.status==='OK';
+  document.getElementById('ver').textContent='v'+v.version+(ok?' · live':' · degraded');
+  document.getElementById('v').textContent='v'+v.version;
+  document.getElementById('feed').textContent=v.md_feed;
+  document.getElementById('at').textContent=new Date(v.deployed_at).toLocaleString('en-GB',{timeZone:'Europe/London'})+' London';
+  const a=document.getElementById('run'); a.textContent='#'+(v.run||'').split('/').pop(); a.href=v.run||'#';
+  const b=document.getElementById('banner');
+  b.className='banner '+(ok?'good':'bad');
+  b.textContent=ok?'Live – market data loading normally (mdfeed-v3)':'No market data – feed mdfeed-v2 is not responding (retired endpoint)';
+  document.getElementById('grid').innerHTML=ok
+    ? rows.map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td><td>'+r[2]+'</td><td>'+r[3]+'</td><td>'+r[4]+'</td></tr>').join('')
+    : '<tr class="empty"><td colspan="5">Waiting for market data… (0 rows loaded)</td></tr>';
+}).catch(()=>{document.getElementById('banner').textContent='version.json not found – run the Deploy workflow';});
+</script>
+</body>
+</html>
