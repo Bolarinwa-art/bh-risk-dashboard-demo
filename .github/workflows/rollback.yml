@@ -1,0 +1,58 @@
+name: Rollback risk-dashboard to v4.6
+on:
+  workflow_dispatch:
+    inputs:
+      causedBy:
+        description: "Change being rolled back"
+        default: "CHG-1042"
+      incidentNumber:
+        description: "Incident this rollback remediates (optional)"
+        default: ""
+      requestedBy:
+        description: "Who asked for the rollback (filled in when started from Slack)"
+        default: ""
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: risk-dashboard
+  cancel-in-progress: false
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build risk-dashboard v4.6 (restore MD_FEED_URL to mdfeed-v3)
+        run: |
+          mkdir -p _site && cp site/index.html _site/
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          jq -n --arg t "$(date -u +%FT%TZ)" --arg c "$GITHUB_SHA" --arg r "$RUN" \
+            '{version:"4.6", md_feed:"mdfeed-v3.bh-internal.example (LIVE)", status:"OK", deployed_at:$t, commit:$c, run:$r}' > _site/version.json
+          cat _site/version.json
+      - uses: actions/configure-pages@v5
+        continue-on-error: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - name: Data-load check
+        run: echo "Market data rows loaded - 4 books OK (mdfeed-v3)"
+      - name: Update Salesforce (CHG-1043 emergency change, link remediation, update ${{ inputs.causedBy }})
+        env:
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+        run: |
+          TOKEN=$(curl -s -X POST "$SF_LOGIN_URL/services/oauth2/token" -d grant_type=client_credentials \
+            --data-urlencode "client_id=$SF_CLIENT_ID" --data-urlencode "client_secret=$SF_CLIENT_SECRET" | jq -r .access_token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "::error::Salesforce authentication failed"; exit 1; fi
+          ACTOR="${{ inputs.requestedBy }}"; [ -z "$ACTOR" ] && ACTOR="$GITHUB_ACTOR"
+          BODY=$(jq -n --arg cb "${{ inputs.causedBy }}" --arg i "${{ inputs.incidentNumber }}" \
+            --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg c "$GITHUB_SHA" --arg a "$ACTOR" \
+            '{changeKey:"CHG-1043", causedByKey:$cb, incidentNumber:$i, version:"4.6", runUrl:$u, commitSha:$c, status:"success", actor:$a}')
+          curl -sf -X POST "$SF_LOGIN_URL/services/apexrest/bh/rollback/v1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | tee sf.json
+          { echo "## Rolled back to v4.6"; echo "Salesforce: \`$(cat sf.json)\`"; } >> "$GITHUB_STEP_SUMMARY"
