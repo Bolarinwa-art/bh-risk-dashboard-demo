@@ -1,0 +1,32 @@
+name: Routine change (Standard, pre-approved)
+on:
+  workflow_dispatch:
+    inputs:
+      changeKey:
+        description: "Salesforce change key"
+        default: "CHG-1044"
+      summary:
+        description: "What the routine change does"
+        default: "risk-engine nightly config refresh (pre-approved standard change)"
+permissions:
+  contents: read
+jobs:
+  routine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply routine configuration
+        run: echo "Applied - ${{ inputs.summary }}"
+      - name: Log Standard change in Salesforce (auto-approved)
+        env:
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+        run: |
+          TOKEN=$(curl -s -X POST "$SF_LOGIN_URL/services/oauth2/token" -d grant_type=client_credentials \
+            --data-urlencode "client_id=$SF_CLIENT_ID" --data-urlencode "client_secret=$SF_CLIENT_SECRET" | jq -r .access_token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "::error::Salesforce authentication failed"; exit 1; fi
+          BODY=$(jq -n --arg k "${{ inputs.changeKey }}" --arg s "${{ inputs.summary }}" \
+            --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg c "$GITHUB_SHA" --arg a "$GITHUB_ACTOR" \
+            '{changeKey:$k, type:"Standard", summary:$s, runUrl:$u, commitSha:$c, ciName:"Risk Dashboard", actor:$a}')
+          curl -sf -X POST "$SF_LOGIN_URL/services/apexrest/bh/change/v1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | tee sf.json
+          echo "Salesforce: \`$(cat sf.json)\`" >> "$GITHUB_STEP_SUMMARY"
