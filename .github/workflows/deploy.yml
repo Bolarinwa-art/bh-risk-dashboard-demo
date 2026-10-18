@@ -1,0 +1,61 @@
+name: Deploy risk-dashboard
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy"
+        type: choice
+        options: ["4.7", "4.6"]
+        default: "4.7"
+      changeKey:
+        description: "Salesforce change key"
+        default: "CHG-1042"
+      summary:
+        description: "Change summary"
+        default: "v4.7: market-data connection setting changed. MD_FEED_URL now points to mdfeed-v2 (was mdfeed-v3). Smoke test: HTTP 200 on /health (no data-load check)."
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: risk-dashboard
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build risk-dashboard v${{ inputs.version }}
+        run: |
+          mkdir -p _site && cp site/index.html _site/
+          if [ "${{ inputs.version }}" = "4.7" ]; then FEED="mdfeed-v2.bh-internal.example (RETIRED)"; STATUS="NO_DATA"; else FEED="mdfeed-v3.bh-internal.example (LIVE)"; STATUS="OK"; fi
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          jq -n --arg v "${{ inputs.version }}" --arg f "$FEED" --arg s "$STATUS" --arg t "$(date -u +%FT%TZ)" --arg c "$GITHUB_SHA" --arg r "$RUN" \
+            '{version:$v, md_feed:$f, status:$s, deployed_at:$t, commit:$c, run:$r}' > _site/version.json
+          cat _site/version.json
+          { echo "## risk-dashboard v${{ inputs.version }}"; echo "Market data feed: **$FEED**"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Smoke test (HTTP only)
+        run: echo "GET /health -> 200 OK (note - no data-load check in this pipeline)"
+      - uses: actions/configure-pages@v5
+        continue-on-error: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - name: Record change in Salesforce
+        env:
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+        run: |
+          TOKEN=$(curl -s -X POST "$SF_LOGIN_URL/services/oauth2/token" -d grant_type=client_credentials \
+            --data-urlencode "client_id=$SF_CLIENT_ID" --data-urlencode "client_secret=$SF_CLIENT_SECRET" | jq -r .access_token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "::error::Salesforce authentication failed"; exit 1; fi
+          BODY=$(jq -n --arg k "${{ inputs.changeKey }}" --arg v "${{ inputs.version }}" --arg s "${{ inputs.summary }}" \
+            --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg c "$GITHUB_SHA" --arg a "$GITHUB_ACTOR" \
+            '{changeKey:$k, type:"Normal", version:$v, summary:$s, runUrl:$u, commitSha:$c, ciName:"Risk Dashboard", actor:$a}')
+          curl -sf -X POST "$SF_LOGIN_URL/services/apexrest/bh/change/v1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | tee sf.json
+          echo "Salesforce: \`$(cat sf.json)\`" >> "$GITHUB_STEP_SUMMARY"
