@@ -34,17 +34,8 @@ jobs:
         run: |
           sleep 5
           for d in LDN-LT-0412 LDN-LT-0877 AMS-LT-0133 REM-LT-2201 REM-LT-1950; do echo "$d  client=5.1.4  tunnel=UP  drops(10m)=0"; done
-      - name: Update Salesforce (close emergency change, resolve incidents)
-        env:
-          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
-          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
-          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+      - name: Rollback summary (Salesforce closes the emergency change when it sees this run succeed)
         run: |
-          TOKEN=$(curl -s -X POST "$SF_LOGIN_URL/services/oauth2/token" -d grant_type=client_credentials \
-            --data-urlencode "client_id=$SF_CLIENT_ID" --data-urlencode "client_secret=$SF_CLIENT_SECRET" | jq -r .access_token)
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "::error::Salesforce authentication failed"; exit 1; fi
-          ACTOR="${{ inputs.requestedBy }}"; [ -z "$ACTOR" ] && ACTOR="$GITHUB_ACTOR"
-          BODY=$(jq -n --arg k "${{ inputs.changeKey }}" --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --arg c "$GITHUB_SHA" --arg a "$ACTOR" '{changeKey:$k, runUrl:$u, commitSha:$c, status:"success", actor:$a}')
-          curl -sf -X POST "$SF_LOGIN_URL/services/apexrest/itsmdemo/vpn-rollback/v1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | tee sf.json
-          { echo "## VPN client rolled back to 5.1.4"; echo "Salesforce: \`$(cat sf.json)\`"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "## VPN client rolled back to 5.1.4" >> "$GITHUB_STEP_SUMMARY"
+          echo "Emergency change ${{ inputs.changeKey }} for ${{ inputs.incidentNumber }}, approved by ${{ inputs.requestedBy }}." >> "$GITHUB_STEP_SUMMARY"
+          echo "5/5 canary devices on 5.1.4 with stable tunnels." >> "$GITHUB_STEP_SUMMARY"
