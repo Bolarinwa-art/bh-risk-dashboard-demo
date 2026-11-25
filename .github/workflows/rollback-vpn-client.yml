@@ -1,0 +1,50 @@
+name: Rollback VPN client 5.2.0 to 5.1.4
+on:
+  workflow_dispatch:
+    inputs:
+      changeKey:
+        description: "Salesforce emergency change key"
+        default: "VPNC-TODAY-RB"
+      incidentNumber:
+        description: "Major incident this rollback remediates"
+        default: ""
+      requestedBy:
+        description: "Who approved the rollback (filled in by Agentforce)"
+        default: ""
+permissions:
+  contents: read
+concurrency:
+  group: vpn-client-rollback
+  cancel-in-progress: false
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pre-checks (emergency change approved, last good version available)
+        run: |
+          echo "Emergency change: ${{ inputs.changeKey }} for ${{ inputs.incidentNumber }} – approved by ${{ inputs.requestedBy }}"
+          echo "Current ring-2 version: 5.2.0  ->  target: 5.1.4 (last known good)"
+      - name: Intune – unassign VPN client 5.2.0 from ring 2 (demo simulation)
+        run: sleep 5; echo "Assignment 'VPN client 5.2.0 / Ring 2' set to Uninstall"
+      - name: Intune – assign VPN client 5.1.4 as Required (demo simulation)
+        run: sleep 5; echo "Assignment 'VPN client 5.1.4 / Ring 2' set to Required"
+      - name: Force device sync (2,300 devices)
+        run: sleep 5; echo "Sync requested for 2,300 managed laptops"
+      - name: Verify tunnel stability on canary devices
+        run: |
+          sleep 5
+          for d in LDN-LT-0412 LDN-LT-0877 AMS-LT-0133 REM-LT-2201 REM-LT-1950; do echo "$d  client=5.1.4  tunnel=UP  drops(10m)=0"; done
+      - name: Update Salesforce (close emergency change, resolve incidents)
+        env:
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+        run: |
+          TOKEN=$(curl -s -X POST "$SF_LOGIN_URL/services/oauth2/token" -d grant_type=client_credentials \
+            --data-urlencode "client_id=$SF_CLIENT_ID" --data-urlencode "client_secret=$SF_CLIENT_SECRET" | jq -r .access_token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "::error::Salesforce authentication failed"; exit 1; fi
+          ACTOR="${{ inputs.requestedBy }}"; [ -z "$ACTOR" ] && ACTOR="$GITHUB_ACTOR"
+          BODY=$(jq -n --arg k "${{ inputs.changeKey }}" --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg c "$GITHUB_SHA" --arg a "$ACTOR" '{changeKey:$k, runUrl:$u, commitSha:$c, status:"success", actor:$a}')
+          curl -sf -X POST "$SF_LOGIN_URL/services/apexrest/itsmdemo/vpn-rollback/v1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | tee sf.json
+          { echo "## VPN client rolled back to 5.1.4"; echo "Salesforce: \`$(cat sf.json)\`"; } >> "$GITHUB_STEP_SUMMARY"
